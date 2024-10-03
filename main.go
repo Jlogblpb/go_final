@@ -83,56 +83,57 @@ func nextDateHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, nextDate)
 }
 
-// Функция для вычисления следующей даты на основе правила повторения
 func NextDate(now time.Time, date string, repeat string) (string, error) {
-	fmt.Println()
-	fmt.Println()
-	fmt.Println("======= Принятые значения: Сейчас:", now.Format("20060102"), "--Старт:", date, "--", repeat, "===========")
+	// Нормализуем 'now' до полуночи
+	nowDateStr := now.Format("20060102")
+	now, err := time.Parse("20060102", nowDateStr)
+	if err != nil {
+		return "", err
+	}
 
-	// Проверяем наличие правила повторения, если его нет - возвращаем ошибку
 	if repeat == "" {
-		fmt.Println("======= ОШИБКА: Правило повторения отсутствует! ===========")
 		return "", errors.New("правило повторения отсутствует")
 	}
 
 	rep := strings.Split(repeat, " ")
-	fmt.Println("======= Парсим правило повторения:", rep, "===========")
 
-	if len(rep) < 1 || (rep[0] != "y" && rep[0] != "d") {
-		fmt.Println("======= ОШИБКА: Неподдерживаемое правило повторения! ===========")
-		return "правило повторения указано в неправильном формате", errors.New("правило повторения указано в неправильном формате")
+	if len(rep) < 1 {
+		return "", errors.New("некорректное правило повторения")
 	}
 
-	// Парсим дату события в формате YYYYMMDD
 	timBase, err := time.Parse("20060102", date)
 	if err != nil {
-		fmt.Println("======= ОШИБКА: Некорректная дата! ===========")
 		return "", err
 	}
-	fmt.Println("======= Дата успешно распознана:", timBase, "===========")
 
-	// Проверяем режим повторения: год или день
 	if rep[0] == "y" {
-		// Если год, то прибавляем к дате год, пока не найдем следующую дату после текущей
-		fmt.Println("======= Определяем режим повтора: год (y) ===========")
-		timBase = timBase.AddDate(1, 0, 0) // Добавляем один год
-		for timBase.Before(now) {
-			timBase = timBase.AddDate(1, 0, 0) // Добавляем один год
-			fmt.Println("======= Добавляем 1 год! Новая дата:", timBase.Format("20060102"), "===========")
+		// Извлекаем день и месяц исходной даты
+		origDay := timBase.Day()
+		origMonth := timBase.Month()
+
+		for {
+			// Прибавляем один год
+			timBase = timBase.AddDate(1, 0, 0)
+
+			// Проверяем, совпадают ли месяц и день
+			if timBase.Day() == origDay && timBase.Month() == origMonth {
+				// Проверяем, что дата после текущей
+				if timBase.After(now) {
+					break
+				}
+			} else {
+				// Если дата изменилась из-за високосного года, устанавливаем на 1 марта
+				timBase = time.Date(timBase.Year(), time.March, 1, 0, 0, 0, 0, timBase.Location())
+				if timBase.After(now) {
+					break
+				}
+			}
 		}
-		result := timBase.Format("20060102")
-		fmt.Println("======= Старая дата:", date, "===========")
-		fmt.Println("=======  Новая дата:", result, "===========")
-		fmt.Println("=========== Добавить: 1 год============")
-		fmt.Println("=======  Новая дата:", result, "===========")
-		return result, nil
+		return timBase.Format("20060102"), nil
 	}
 
 	if rep[0] == "d" {
-		// Если день, то прибавляем указанное количество дней
-		fmt.Println("======= Определяем режим повтора: день (d) ===========")
 		if len(rep) < 2 {
-			fmt.Println("======= ОШИБКА: Некорректно указан режим повторения! ===========")
 			return "", errors.New("некорректно указан режим повторения")
 		}
 
@@ -142,33 +143,17 @@ func NextDate(now time.Time, date string, repeat string) (string, error) {
 		}
 
 		if days > 400 {
-			fmt.Println("======= ОШИБКА: Количество дней превышает 400! ===========")
 			return "", errors.New("перенос события более чем на 400 дней недопустим")
 		}
 
-		fmt.Println("======= Количество дней для добавления:", days, "===========")
-		if days == 1 && now.Format("20060102") == timBase.Format("20060102") {
-			fmt.Println("")
-			fmt.Println("***********************************************")
-			fmt.Println("======= ", now.Format("20060102"), " = ", timBase.Format("20060102"), "===========")
-			fmt.Println("======= ВСЕГО 1 ДЕНЬ!!!! ВЫХОДИМ ===========")
-			fmt.Println("***********************************************")
-			fmt.Println("")
-		} else {
-			fmt.Println("======= ВСЕГО", days, "ДНЕЙ!!!! ВЫХОДИМ ===========")
+		// Добавляем дни до тех пор, пока дата не станет после текущей
+		for {
 			timBase = timBase.AddDate(0, 0, days)
-			for timBase.Before(now) {
-				timBase = timBase.AddDate(0, 0, days)
-				fmt.Println("======= Добавляем", days, "дней! Новая дата:", timBase.Format("20060102"), "===========")
+			if timBase.After(now) {
+				break
 			}
 		}
-
-		result := timBase.Format("20060102")
-		fmt.Println("=======   Текущая дата:", now.Format("20060102"), "===========")
-		fmt.Println("======= Стартовая дата:", date, "===========")
-		fmt.Println("============= Добавить:", days, " дней==========")
-		fmt.Println("=======     Новая дата:", result, "===========")
-		return result, nil
+		return timBase.Format("20060102"), nil
 	}
 
 	return "", errors.New("некорректное правило повторения")
@@ -191,10 +176,6 @@ func addTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Println()
-	fmt.Println("------ Принятые значения:", "--Старт:", task.Date, "---", task.Repeat, "---", task.Title, "---", task.Comment, "===========")
-	fmt.Println()
-
 	// Проверка обязательного поля Title
 	if task.Title == "" {
 		sendJSONError(w, "Не указан заголовок задачи", http.StatusBadRequest)
@@ -203,34 +184,33 @@ func addTask(w http.ResponseWriter, r *http.Request) {
 
 	// Установка текущей даты, если поле date не указано
 	now := time.Now()
-	if task.Date == "" {
-		task.Date = now.Format("20060102")
-	} else {
-		parsedDate, err := time.Parse("20060102", task.Date)
-		if err != nil {
-			sendJSONError(w, "Дата представлена в неправильном формате, ожидается YYYYMMDD", http.StatusBadRequest)
-			return
-		}
+	nowDateStr := now.Format("20060102")
+	now, _ = time.Parse("20060102", nowDateStr)
 
-		if parsedDate.Before(now) {
-			if task.Repeat == "" {
-				task.Date = now.Format("20060102")
-			} else {
-				nextDate, err := NextDate(now, task.Date, task.Repeat)
-				if err != nil {
-					sendJSONError(w, "Ошибка в правиле повторения: "+err.Error(), http.StatusBadRequest)
-					return
-				}
-				task.Date = nextDate
-			}
-		}
+	if task.Date == "" {
+		task.Date = nowDateStr
 	}
 
-	// Проверка правила повторения
+	parsedDate, err := time.Parse("20060102", task.Date)
+	if err != nil {
+		sendJSONError(w, "Дата представлена в неправильном формате, ожидается YYYYMMDD", http.StatusBadRequest)
+		return
+	}
+
 	if task.Repeat != "" {
-		if _, err := NextDate(now, task.Date, task.Repeat); err != nil {
-			sendJSONError(w, "Правило повторения указано в неправильном формате: "+err.Error(), http.StatusBadRequest)
-			return
+		// Если задача повторяющаяся и дата в прошлом, вычисляем следующую дату
+		if parsedDate.Before(now) {
+			nextDate, err := NextDate(now, task.Date, task.Repeat)
+			if err != nil {
+				sendJSONError(w, "Правило повторения указано в неправильном формате: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			task.Date = nextDate
+		}
+	} else {
+		// Если задача не повторяющаяся и дата в прошлом, устанавливаем сегодняшнюю дату
+		if parsedDate.Before(now) {
+			task.Date = nowDateStr
 		}
 	}
 
@@ -341,7 +321,6 @@ func getTaskByID(w http.ResponseWriter, r *http.Request, id string) {
 	json.NewEncoder(w).Encode(task)
 }
 
-// markTaskDone обрабатывает POST-запрос для завершения задачи
 func markTaskDone(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
@@ -376,8 +355,14 @@ func markTaskDone(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// Периодическая задача, рассчитываем следующую дату
-		now := time.Now()
-		nextDate, err := NextDate(now, task.Date, task.Repeat)
+		// Используем дату задачи для вычисления следующей даты
+		parsedDate, err := time.Parse("20060102", task.Date)
+		if err != nil {
+			sendJSONError(w, "Некорректный формат даты задачи", http.StatusInternalServerError)
+			return
+		}
+
+		nextDate, err := NextDate(parsedDate, task.Date, task.Repeat)
 		if err != nil {
 			sendJSONError(w, "Ошибка при вычислении следующей даты: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -507,34 +492,33 @@ func updateTask(w http.ResponseWriter, r *http.Request) {
 
 	// Установка текущей даты, если поле date не указано
 	now := time.Now()
-	if task.Date == "" {
-		task.Date = now.Format("20060102")
-	} else {
-		parsedDate, err := time.Parse("20060102", task.Date)
-		if err != nil {
-			sendJSONError(w, "Дата представлена в неправильном формате, ожидается YYYYMMDD", http.StatusBadRequest)
-			return
-		}
+	nowDateStr := now.Format("20060102")
+	now, _ = time.Parse("20060102", nowDateStr)
 
-		if parsedDate.Before(now) {
-			if task.Repeat == "" {
-				task.Date = now.Format("20060102")
-			} else {
-				nextDate, err := NextDate(now, task.Date, task.Repeat)
-				if err != nil {
-					sendJSONError(w, "Ошибка в правиле повторения: "+err.Error(), http.StatusBadRequest)
-					return
-				}
-				task.Date = nextDate
-			}
-		}
+	if task.Date == "" {
+		task.Date = nowDateStr
 	}
 
-	// Проверка правила повторения
+	parsedDate, err := time.Parse("20060102", task.Date)
+	if err != nil {
+		sendJSONError(w, "Дата представлена в неправильном формате, ожидается YYYYMMDD", http.StatusBadRequest)
+		return
+	}
+
 	if task.Repeat != "" {
-		if _, err := NextDate(now, task.Date, task.Repeat); err != nil {
-			sendJSONError(w, "Правило повторения указано в неправильном формате: "+err.Error(), http.StatusBadRequest)
-			return
+		// Если задача повторяющаяся и дата в прошлом, вычисляем следующую дату
+		if parsedDate.Before(now) {
+			nextDate, err := NextDate(now, task.Date, task.Repeat)
+			if err != nil {
+				sendJSONError(w, "Ошибка в правиле повторения: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			task.Date = nextDate
+		}
+	} else {
+		// Если задача не повторяющаяся и дата в прошлом, устанавливаем сегодняшнюю дату
+		if parsedDate.Before(now) {
+			task.Date = nowDateStr
 		}
 	}
 
