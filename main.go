@@ -341,54 +341,57 @@ func getTaskByID(w http.ResponseWriter, r *http.Request, id string) {
 	json.NewEncoder(w).Encode(task)
 }
 
-// markTaskDone обрабатывает POST-запрос для выполнения задачи.
+// markTaskDone обрабатывает POST-запрос для завершения задачи
 func markTaskDone(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		json.NewEncoder(w).Encode(map[string]string{"error": "Не указан идентификатор"})
+		sendJSONError(w, "Не указан идентификатор задачи", http.StatusBadRequest)
 		return
 	}
 
 	db, err := sql.Open("sqlite3", "./scheduler.db")
 	if err != nil {
-		http.Error(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+		sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	defer db.Close()
 
-	var task struct {
-		ID      string `json:"id"`
-		Date    string `json:"date"`
-		Title   string `json:"title"`
-		Comment string `json:"comment"`
-		Repeat  string `json:"repeat"`
-	}
-
+	var task Task
 	err = db.QueryRow("SELECT id, date, title, comment, repeat FROM scheduler WHERE id = ?", id).Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-			json.NewEncoder(w).Encode(map[string]string{"error": "Задача не найдена"})
+			sendJSONError(w, "Задача не найдена", http.StatusNotFound)
 		} else {
-			http.Error(w, "Ошибка при получении задачи: "+err.Error(), http.StatusInternalServerError)
+			sendJSONError(w, "Ошибка при получении задачи: "+err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
 
-	// Если задача не имеет правила повторения, удаляем ее.
 	if task.Repeat == "" {
+		// Одноразовая задача, удаляем ее
 		_, err = db.Exec("DELETE FROM scheduler WHERE id = ?", id)
 		if err != nil {
-			http.Error(w, "Ошибка при удалении задачи: "+err.Error(), http.StatusInternalServerError)
+			sendJSONError(w, "Ошибка при удалении задачи: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-		json.NewEncoder(w).Encode(map[string]string{})
-		return
+	} else {
+		// Периодическая задача, рассчитываем следующую дату
+		now := time.Now()
+		nextDate, err := NextDate(now, task.Date, task.Repeat)
+		if err != nil {
+			sendJSONError(w, "Ошибка при вычислении следующей даты: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Обновляем дату задачи на следующую
+		_, err = db.Exec("UPDATE scheduler SET date = ? WHERE id = ?", nextDate, id)
+		if err != nil {
+			sendJSONError(w, "Ошибка при обновлении задачи: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 
-	// Если задача имеет правило повторения, просто возвращаем успешный ответ.
+	// Возвращаем пустой JSON при успешном завершении
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	json.NewEncoder(w).Encode(map[string]string{})
 }
@@ -589,6 +592,40 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		updateTask(w, r)
 	case http.MethodDelete:
+		// Обработчик для удаления задачи
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			sendJSONError(w, "Не указан идентификатор", http.StatusBadRequest)
+			return
+		}
+
+		db, err := sql.Open("sqlite3", "./scheduler.db")
+		if err != nil {
+			sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer db.Close()
+
+		res, err := db.Exec("DELETE FROM scheduler WHERE id = ?", id)
+		if err != nil {
+			sendJSONError(w, "Ошибка при удалении задачи: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		rowsAffected, err := res.RowsAffected()
+		if err != nil {
+			sendJSONError(w, "Ошибка при проверке удаления задачи: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		if rowsAffected == 0 {
+			sendJSONError(w, "Задача не найдена", http.StatusNotFound)
+			return
+		}
+
+		// Возвращаем пустой JSON при успешном удалении
+		w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+		json.NewEncoder(w).Encode(map[string]string{})
 
 	default:
 		sendJSONError(w, "Метод не разрешен", http.StatusMethodNotAllowed)
