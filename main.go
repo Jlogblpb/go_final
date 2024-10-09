@@ -24,6 +24,8 @@ type Task struct {
 	Repeat  string `json:"repeat"`
 }
 
+var db *sql.DB
+
 // createDB инициализирует базу данных SQLite и создает таблицу.
 func createDB() {
 	db, err := sql.Open("sqlite3", "./scheduler.db")
@@ -215,12 +217,6 @@ func addTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Открытие базы данных
-	db, err := sql.Open("sqlite3", "./scheduler.db")
-	if err != nil {
-		sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
 
 	// Вставка новой задачи в базу данных
 	stmt, err := db.Prepare("INSERT INTO scheduler(date, title, comment, repeat) VALUES (?, ?, ?, ?)")
@@ -250,12 +246,12 @@ func addTask(w http.ResponseWriter, r *http.Request) {
 
 // getTasks извлекает задачи из базы данных и возвращает их в формате JSON.
 func getTasks(w http.ResponseWriter, r *http.Request) {
-	db, err := sql.Open("sqlite3", "./scheduler.db")
-	if err != nil {
-		http.Error(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
+	// db, err := sql.Open("sqlite3", "./scheduler.db")
+	// if err != nil {
+	// 	http.Error(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	// defer db.Close()
 
 	rows, err := db.Query("SELECT id, date, title, comment, repeat FROM scheduler ORDER BY date ASC")
 	if err != nil {
@@ -291,12 +287,12 @@ func getTasks(w http.ResponseWriter, r *http.Request) {
 
 // getTaskByID извлекает задачу по идентификатору из базы данных и возвращает ее в формате JSON.
 func getTaskByID(w http.ResponseWriter, r *http.Request, id string) {
-	db, err := sql.Open("sqlite3", "./scheduler.db")
-	if err != nil {
-		http.Error(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
+	// db, err := sql.Open("sqlite3", "./scheduler.db")
+	// if err != nil {
+	// 	http.Error(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	// defer db.Close()
 
 	var task struct {
 		ID      string `json:"id"`
@@ -306,7 +302,7 @@ func getTaskByID(w http.ResponseWriter, r *http.Request, id string) {
 		Repeat  string `json:"repeat"`
 	}
 
-	err = db.QueryRow("SELECT id, date, title, comment, repeat FROM scheduler WHERE id = ?", id).Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat)
+	err := db.QueryRow("SELECT id, date, title, comment, repeat FROM scheduler WHERE id = ?", id).Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			w.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -328,15 +324,15 @@ func markTaskDone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := sql.Open("sqlite3", "./scheduler.db")
-	if err != nil {
-		sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
+	// db, err := sql.Open("sqlite3", "./scheduler.db")
+	// if err != nil {
+	// 	sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	// defer db.Close()
 
 	var task Task
-	err = db.QueryRow("SELECT id, date, title, comment, repeat FROM scheduler WHERE id = ?", id).Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat)
+	err := db.QueryRow("SELECT id, date, title, comment, repeat FROM scheduler WHERE id = ?", id).Scan(&task.ID, &task.Date, &task.Title, &task.Comment, &task.Repeat)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			sendJSONError(w, "Задача не найдена", http.StatusNotFound)
@@ -388,12 +384,12 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db, err := sql.Open("sqlite3", "./scheduler.db")
-	if err != nil {
-		sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
+	// db, err := sql.Open("sqlite3", "./scheduler.db")
+	// if err != nil {
+	// 	sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	// defer db.Close()
 
 	// Устанавливаем значение лимита по умолчанию
 	limit := 20 // Рекомендуемое количество задач
@@ -410,6 +406,7 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 	dateParam := r.URL.Query().Get("date")
 
 	var rows *sql.Rows
+	var err error
 
 	// Построение SQL-запроса на основе параметров
 	if search != "" {
@@ -417,6 +414,10 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 		searchPattern := "%" + search + "%"
 		query := "SELECT id, date, title, comment, repeat FROM scheduler WHERE title LIKE ? OR comment LIKE ? ORDER BY date ASC LIMIT ?"
 		rows, err = db.Query(query, searchPattern, searchPattern, limit)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
 	} else if dateParam != "" {
 		// Фильтрация по дате
 		date := dateParam
@@ -432,21 +433,25 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 
 		query := "SELECT id, date, title, comment, repeat FROM scheduler WHERE date = ? ORDER BY date ASC LIMIT ?"
 		rows, err = db.Query(query, date, limit)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
 	} else {
 		// Получение всех задач, отсортированных по дате
 		query := "SELECT id, date, title, comment, repeat FROM scheduler ORDER BY date ASC LIMIT ?"
 		rows, err = db.Query(query, limit)
+		if err != nil {
+			sendJSONError(w, "Ошибка при получении задач: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
 	}
-
-	if err != nil {
-		sendJSONError(w, "Ошибка при получении задач: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
 
 	// Инициализируем слайс задач как пустой, чтобы не получить null в JSON
 	tasks := make([]Task, 0)
 
+	// Чтение задач из базы данных
 	for rows.Next() {
 		var task Task
 		var id int64
@@ -523,12 +528,12 @@ func updateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Открытие базы данных
-	db, err := sql.Open("sqlite3", "./scheduler.db")
-	if err != nil {
-		sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	defer db.Close()
+	// db, err := sql.Open("sqlite3", "./scheduler.db")
+	// if err != nil {
+	// 	sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	// defer db.Close()
 
 	// Проверяем, существует ли задача с таким ID
 	var existingID string
@@ -583,12 +588,12 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		db, err := sql.Open("sqlite3", "./scheduler.db")
-		if err != nil {
-			sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		defer db.Close()
+		// db, err := sql.Open("sqlite3", "./scheduler.db")
+		// if err != nil {
+		// 	sendJSONError(w, "Ошибка сервера: "+err.Error(), http.StatusInternalServerError)
+		// 	return
+		// }
+		// defer db.Close()
 
 		res, err := db.Exec("DELETE FROM scheduler WHERE id = ?", id)
 		if err != nil {
@@ -620,6 +625,14 @@ func main() {
 	if _, err := os.Stat("./scheduler.db"); os.IsNotExist(err) {
 		createDB()
 	}
+	// Открытие базы данных\
+	var err error
+	db, err = sql.Open("sqlite3", "./scheduler.db")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer db.Close()
 
 	http.HandleFunc("/api/task", taskHandler)
 	http.HandleFunc("/api/tasks", tasksHandler)
