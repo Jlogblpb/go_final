@@ -24,14 +24,11 @@ type Task struct {
 	Repeat  string `json:"repeat"`
 }
 
-// DbRep представляет репозиторий базы данных
-var db *sql.DB
-
 // createDB инициализирует базу данных SQLite и создает таблицу.
-func createDB() {
+func createDB() error {
 	db, err := sql.Open("sqlite3", "./scheduler.db")
 	if err != nil {
-		return
+		return fmt.Errorf("Ошибка при открытии базы данных: %v", err)
 	}
 	defer db.Close()
 
@@ -47,9 +44,10 @@ func createDB() {
 	}
 	for _, cmd := range commands {
 		if _, err := db.Exec(cmd); err != nil {
-			return
+			return fmt.Errorf("Ошибка при создании таблицы: %v", err)
 		}
 	}
+	return nil
 }
 
 // nextDateHandler обрабатывает HTTP-запрос для получения следующей даты задачи.
@@ -168,12 +166,13 @@ func sendJSONError(w http.ResponseWriter, message string, code int) {
 	w.WriteHeader(code)
 	err := json.NewEncoder(w).Encode(map[string]string{"error": message})
 	if err != nil {
-		return
+		log.Printf("Ошибка при отправке JSON-ответа: %v", err)
+		http.Error(w, "Ошибка при отправке ответа", http.StatusInternalServerError)
 	}
 }
 
 // addTask добавляет новую задачу в базу данных
-func addTask(w http.ResponseWriter, r *http.Request) {
+func addTask(w http.ResponseWriter, r *http.Request, DbRep *Repo) {
 	var task Task
 
 	// Декодирование JSON-запроса
@@ -220,17 +219,18 @@ func addTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	DbRep := NewRepo(db)
-
 	idAdd, err := DbRep.addTaskToDB(task)
+	if err != nil {
+		sendJSONError(w, "Ошибка при добавлении задачи: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	task.ID = strconv.FormatInt(idAdd, 10)
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	json.NewEncoder(w).Encode(map[string]string{"id": task.ID})
 }
 
 // getTasks извлекает задачи из базы данных и возвращает их в формате JSON.
-func getTasks(w http.ResponseWriter, r *http.Request) {
-	DbRep := NewRepo(db)
+func getTasks(w http.ResponseWriter, r *http.Request, DbRep *Repo) {
 	rows, err := DbRep.getTaskFromDB()
 	if err != nil {
 		http.Error(w, "Ошибка при получении задач: "+err.Error(), http.StatusInternalServerError)
@@ -266,11 +266,9 @@ func getTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 // getTaskByID извлекает задачу по идентификатору из базы данных и возвращает ее в формате JSON.
-func getTaskByID(w http.ResponseWriter, r *http.Request, id string) {
+func getTaskByID(w http.ResponseWriter, r *http.Request, id string, DbRep *Repo) {
 
 	var task Task
-
-	DbRep := NewRepo(db)
 	err := DbRep.checkTaskDone(id, &task)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -290,8 +288,7 @@ func getTaskByID(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 // markTaskDone помечает задачу как выполненную.
-func markTaskDone(w http.ResponseWriter, r *http.Request) {
-	DbRep := NewRepo(db)
+func markTaskDone(w http.ResponseWriter, r *http.Request, DbRep *Repo) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		sendJSONError(w, "Не указан идентификатор задачи", http.StatusBadRequest)
@@ -339,7 +336,12 @@ func markTaskDone(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Обновляем дату задачи на следующую дату
-		_ = DbRep.UpdateNewDate(id, nextDate)
+		err = DbRep.UpdateNewDate(id, nextDate)
+		if err != nil {
+			sendJSONError(w, "Ошибка при обновлении даты задачи: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
 	}
 
 	// Возвращаем пустой JSON при успешном завершении
@@ -351,7 +353,7 @@ func markTaskDone(w http.ResponseWriter, r *http.Request) {
 }
 
 // tasksHandler обрабатывает GET-запросы к /api/tasks
-func tasksHandler(w http.ResponseWriter, r *http.Request) {
+func tasksHandler(w http.ResponseWriter, r *http.Request, DbRep *Repo) {
 	if r.Method != http.MethodGet {
 		sendJSONError(w, "Метод не разрешен", http.StatusMethodNotAllowed)
 		return
@@ -373,9 +375,11 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 
 	var tasks []Task
 	var err error
-	DbRep := NewRepo(db)
 	tasks, err = DbRep.searchTaskFromDB(search, dateParam, limit)
-
+	if err != nil {
+		sendJSONError(w, "Ошибка при поиске задач: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	// Возвращаем задачи в формате JSON
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	err = json.NewEncoder(w).Encode(map[string]interface{}{"tasks": tasks})
@@ -385,7 +389,7 @@ func tasksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // updateTask обновляет существующую задачу в базе данных
-func updateTask(w http.ResponseWriter, r *http.Request) {
+func updateTask(w http.ResponseWriter, r *http.Request, DbRep *Repo) {
 	var task Task
 
 	// Декодирование JSON-запроса
@@ -439,7 +443,6 @@ func updateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Проверяем, существует ли задача с таким ID
-	DbRep := NewRepo(db)
 	err = DbRep.checkExistingID(task.ID)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -451,30 +454,32 @@ func updateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Обновление задачи в базе данных
-	_ = DbRep.Update(task)
+	err = DbRep.Update(task)
+	if err != nil {
+		sendJSONError(w, "Ошибка при обновлении задачи: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 
 	// Возвращаем пустой JSON при успешном обновлении
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	err = json.NewEncoder(w).Encode(map[string]string{})
-	if err != nil {
-		return
-	}
+	json.NewEncoder(w).Encode(map[string]string{})
+
 }
 
 // taskHandler обрабатывает маршруты для /api/task
-func taskHandler(w http.ResponseWriter, r *http.Request) {
+func taskHandler(w http.ResponseWriter, r *http.Request, DbRep *Repo) {
 	switch r.Method {
 	case http.MethodPost:
-		addTask(w, r)
+		addTask(w, r, DbRep)
 	case http.MethodGet:
 		if id := r.URL.Query().Get("id"); id != "" {
-			getTaskByID(w, r, id)
+			getTaskByID(w, r, id, DbRep)
 		} else {
 			// Возвращаем ошибку при отсутствии идентификатора
 			sendJSONError(w, "Не указан идентификатор", http.StatusBadRequest)
 		}
 	case http.MethodPut:
-		updateTask(w, r)
+		updateTask(w, r, DbRep)
 	case http.MethodDelete:
 		// Обработчик для удаления задачи
 		id := r.URL.Query().Get("id")
@@ -490,7 +495,6 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		DbRep := NewRepo(db)
 		_, err = DbRep.Delete(idInt)
 		if err != nil {
 			sendJSONError(w, "Ошибка при удалении задачи: "+err.Error(), http.StatusInternalServerError)
@@ -511,11 +515,16 @@ func taskHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	if _, err := os.Stat("./scheduler.db"); os.IsNotExist(err) {
-		createDB()
+		err = createDB()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
 	}
 
 	// Открытие базы данных
 	var err error
+	var db *sql.DB
 	db, err = sql.Open("sqlite3", "./scheduler.db")
 	if err != nil {
 		fmt.Println(err)
@@ -523,9 +532,19 @@ func main() {
 	}
 	defer db.Close()
 
-	http.HandleFunc("/api/task", taskHandler)
-	http.HandleFunc("/api/tasks", tasksHandler)
-	http.HandleFunc("/api/task/done", markTaskDone)
+	// Создаем экземпляр репозитория
+	DbRep := NewRepo(db)
+
+	http.HandleFunc("/api/task", func(w http.ResponseWriter, r *http.Request) {
+		taskHandler(w, r, DbRep)
+	})
+	http.HandleFunc("/api/tasks", func(w http.ResponseWriter, r *http.Request) {
+		tasksHandler(w, r, DbRep)
+	})
+	http.HandleFunc("/api/task/done", func(w http.ResponseWriter, r *http.Request) {
+		markTaskDone(w, r, DbRep)
+	})
+
 	http.Handle("/", http.FileServer(http.Dir("./web")))
 	http.HandleFunc("/api/nextdate", nextDateHandler)
 	log.Fatal(http.ListenAndServe(":7540", nil))
